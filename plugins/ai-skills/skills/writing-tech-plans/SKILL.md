@@ -9,7 +9,7 @@ description: Use when writing, drafting, or preparing a tech plan or technical s
 
 - Prerequisite: a **PRD** (or equivalent product requirements) exists, plus **design links** if the work is product-driven and has designs. Don't start without them.
 - Use the team's tech plan template if one exists (ask the user for the link or look in the repo). Otherwise use the default section list below. Title the doc `Tech Plan: <Name>`.
-- If the plan is big enough that its review would run 90+ minutes, split it into **phased sibling plans** (e.g. `Tech Plan: Billing Service — Beta` and `... — Launch`) that link to each other, each additive on the last.
+- If the plan is big enough that its review would run 90+ minutes, split it into **phased sibling plans** (e.g. `Tech Plan: Billing Service — Beta` and `... — Launch`) that link to each other, each additive on the last. Don't let phases stack depth on one layer only (e.g. several backend-only phases in a row) — an early phase should land a thin real end-to-end slice so the consuming side (UI, caller, downstream job) is exercised before later phases add depth on top of an unverified assumption.
 - Keep it an outline, not an essay: a good plan is a few user stories, a short list of services, a few milestones, a few open questions.
 
 ## Default Template
@@ -40,7 +40,7 @@ Use these sections, in order, unless the team's template says otherwise:
 - *Infrastructure*: new jobs, webhooks, change-data-capture, monitors — name the pattern being copied if one exists.
 - *Dependencies*: each with an **owner** and its resolution if decided ("owned by this project (decided in review)").
 
-**Milestones** — `#### Milestone N: [Name] (ETA: ~X days/weeks)`, each a checklist of concrete tasks with **point estimates in parentheses**. Make tests an explicit line item per milestone. Ticket descriptions live here, **not in the issue tracker** — tickets are cut only after approval. Put feature flags/killswitches/experiments in an **early milestone** so code ships continuously. Note how QA runs (e.g. continuously alongside milestones vs a separate pass).
+**Milestones** — `#### Milestone N: [Name] (ETA: ~X days/weeks)`, each a checklist of concrete tasks with **point estimates in parentheses**. Make tests an explicit line item per milestone. Ticket descriptions live here, **not in the issue tracker** — tickets are cut only after approval. Put feature flags/killswitches/experiments in an **early milestone** so code ships continuously. Note how QA runs (e.g. continuously alongside milestones vs a separate pass). If any milestone's tasks assume the shape of a real external system (a third-party API/feed, a production-like DB or network config, a model/provider's real behavior), put a cheap task to hit the real thing in the **earliest** milestone that touches it — don't let several milestones build on an assumption that's never been checked against reality.
 
 **Open Questions** — each question states the decision needed, who's involved, and **what breaks if it's left unresolved**. When a question is settled, don't delete it — append `→ Resolved (review): <decision>` in place. Resolved questions are the plan's decision log.
 

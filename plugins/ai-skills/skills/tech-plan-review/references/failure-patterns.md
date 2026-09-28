@@ -84,6 +84,22 @@ The outcome version of each:
 
 **How to call it out:** Either add a mitigation or move the bullet to Open Questions.
 
+## 9. Assumed reality, untested
+
+**What it looks like:** Multiple milestones build features on the assumed shape or behavior of a real external system (a third-party API/feed format, a production-like DB or network config, a model/provider's real output) without an early task that actually hits the real thing.
+
+**Why it matters:** Adversarial review and tests against synthetic fixtures cannot catch a wrong assumption about the real world — only contact with the real system can, and it's usually near-free to check early. Finding this on milestone 5 instead of milestone 1 means every milestone built on top of the bad assumption needs rework.
+
+**How to call it out:** "Milestones 2 through 4 all assume [X] about the real system, but nothing checks that until [Y]. Move a cheap smoke test against the real thing into Milestone 1."
+
+## 10. Depth on one layer, no check on the consumer
+
+**What it looks like:** The plan builds backend/producer capability across several milestones (or several phased sibling plans) for a feature meant to surface somewhere else — a UI, a caller, a downstream job — without naming what already exists on the consuming side or confirming it's wired up to use the new capability.
+
+**Why it matters:** Backend correctness says nothing about whether the feature is reachable. A plan can ship several fully-reviewed milestones of real capability that nothing calls, and the gap only surfaces when someone tries to use the finished feature end-to-end.
+
+**How to call it out:** "This plan adds three milestones of [capability] but doesn't say what on the [UI/caller] side will use it. Add a line naming the consuming surface's current state (built / built-but-unwired / not started) and put a thin end-to-end slice in an early milestone."
+
 ## Anti-pattern: the review that does too much
 
 Reviewers are not paid to design the system. The author owns the design. The reviewer's job is to flag structural issues, name missing pieces, and surface obvious alternatives. If the review ends up rewriting the plan, the review went too far. When in doubt, point at the gap and let the author fill it.

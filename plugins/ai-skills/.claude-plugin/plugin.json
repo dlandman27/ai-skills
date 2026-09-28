@@ -1,5 +1,5 @@
 {
   "name": "ai-skills",
   "description": "General-purpose engineering skills — debugging, TDD, verification, blind reviews, planning, and ticket workflows",
-  "version": "0.2.0"
+  "version": "0.2.1"
 }
