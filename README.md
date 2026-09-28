@@ -24,6 +24,7 @@ General-purpose engineering skills for Claude Code, packaged as a plugin marketp
 | `cutting-tickets` / `executing-tickets` | Plan → tracker tickets → verified code |
 | `review` | Opt-in blind local PR review against the repo's `AGENTS.md`/`CLAUDE.md` (sonnet by default) |
 | `spec-review` | Blind check that the diff matches the ticket |
+| `add-skill` | Add a new skill to this marketplace |
 | `reviewing-sessions` | Retro after a session; feed lessons back into skills |
 
 ## Credits
