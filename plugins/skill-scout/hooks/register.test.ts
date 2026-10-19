@@ -27,3 +27,28 @@ test('right after a resume the check waits, then runs once the next turn is done
   expect(waiting.text).toContain('I will check after your next message')
   expect(forks).toBe(2)
 })
+
+test('asking again while a check runs waits for it instead of saying "already checking"', async ($, on) => {
+  // Arrange
+  mock.store(on)
+  let forks = 0
+  let finish: () => void = () => {}
+  const gate = new Promise<void>(resolve => {
+    finish = resolve
+  })
+  on('model.fork', async () => {
+    forks += 1
+    await gate
+    return { value: { isAnswered: true, text: '{"kind": "new", "confidence": 5, "name": "x"}', usage: NO_USAGE } } as never
+  })
+
+  // Act
+  const first = $.command.run({ command: 'skill-scout', args: '' } as never) as Promise<{ text?: string }>
+  const second = $.command.run({ command: 'skill-scout', args: '' } as never) as Promise<{ text?: string }>
+  finish()
+  const answers = await Promise.all([first, second])
+
+  // Assert
+  expect(forks).toBe(1)
+  expect(answers.map(answer => answer.text)).toEqual(['Nothing worth a skill here (5%).', 'Nothing worth a skill here (5%).'])
+})

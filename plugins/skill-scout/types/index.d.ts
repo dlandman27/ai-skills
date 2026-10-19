@@ -15,6 +15,6 @@ export type SeenIdea = { key: string; why: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'skill-scout': { idea: SkillIdea | null; isChecking: boolean }
+    'skill-scout': { idea: SkillIdea | null }
   }
 }

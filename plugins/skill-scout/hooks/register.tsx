@@ -5,7 +5,6 @@ import type { SeenIdea, SkillIdea } from '../types'
 import { draftPrompt, historyLine, isCorrection, normalizeSeen, parseIdea, scoutPrompt, seenEntry } from './idea'
 
 const idea = atom({ plugin: 'skill-scout', key: 'idea' } as const, null)
-const isChecking = atom({ plugin: 'skill-scout', key: 'isChecking' } as const, false)
 
 // Right after a resume or /clear nothing has been sent yet, so there is no conversation to fork.
 const NOTHING_TO_FORK = 'nothing-to-fork'
@@ -42,15 +41,18 @@ function headline(found: SkillIdea): string {
 
 type CheckOutcome = { text: string; isWaiting: boolean }
 
-async function check($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
-  if (await read($, isChecking)) return { text: 'Already checking.', isWaiting: false }
-  await update($, isChecking, () => true)
+// The check in flight, held by this module rather than session state: a reload or a check cut short
+// drops it with the module, so nothing is left stuck "checking".
+let running: Promise<CheckOutcome> | null = null
 
-  try {
-    return await surface($, threshold, correction)
-  } finally {
-    await update($, isChecking, () => false)
-  }
+// A second ask while a check runs waits for that one and shares its answer.
+function check($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
+  if (running !== null) return running
+  running = surface($, threshold, correction).finally(() => {
+    running = null
+  })
+
+  return running
 }
 
 // The banner above the prompt is the only signal; no toast, so a suggestion never interrupts.
@@ -96,7 +98,6 @@ export const register: Register = (on, options) => {
   let isCheckOwed = false
 
   on('session.start', async ($, e, next) => {
-    await update($, isChecking, () => false)
     await $.command.register({
       name: 'skill-scout',
       description: 'Check this conversation for a skill idea; `list` shows past ideas, `draft <n>` drafts one',
