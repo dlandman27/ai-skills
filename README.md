@@ -27,6 +27,12 @@ General-purpose engineering skills for Claude Code, packaged as a plugin marketp
 | `add-skill` | Add a new skill to this marketplace |
 | `reviewing-sessions` | Retro after a session; feed lessons back into skills |
 
+## Mods
+
+| Mod | What it does |
+|-----|--------------|
+| `skill-scout` | Watches the chat and suggests a new skill, or an edit to an existing one, when a workflow could be faster. Shows a banner with **Draft it**; `/skill-scout list` and `/skill-scout draft <n>` for past ideas. Install with `/plugin install skill-scout@ai-skills`, or point `CLAUDE_CODE_PLUGIN_DIRS` at `plugins/skill-scout`. |
+
 ## Credits
 
 

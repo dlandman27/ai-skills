@@ -1,0 +1,26 @@
+{
+  "name": "skill-scout",
+  "version": "0.2.0",
+  "description": "Watches the chat and suggests a new skill when a repeatable workflow could be faster",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "threshold": {
+      "type": "number",
+      "title": "Confidence threshold",
+      "description": "Only suggest at or above this confidence (0-100)",
+      "default": 80
+    },
+    "minTools": {
+      "type": "number",
+      "title": "Tool calls to trigger",
+      "description": "Check after a turn with at least this many tool calls",
+      "default": 6
+    },
+    "everyTurns": {
+      "type": "number",
+      "title": "Check every N working turns",
+      "description": "Also check after this many turns that used tools; quiet turns never count",
+      "default": 5
+    }
+  }
+}
