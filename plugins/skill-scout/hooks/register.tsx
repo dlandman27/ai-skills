@@ -45,14 +45,46 @@ type CheckOutcome = { text: string; isWaiting: boolean }
 // drops it with the module, so nothing is left stuck "checking".
 let running: Promise<CheckOutcome> | null = null
 
+let runningSince: number | null = null
+let lastOutcome: string | null = null
+
+const PROGRESS_TICK_MS = 1000
+
+const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
+
+// A check is one long model call with no steps to report, so the status line shows that it runs and for how long.
+async function withProgress($: EngineInterface, work: () => Promise<CheckOutcome>): Promise<CheckOutcome> {
+  const startedAt = await $.clock.now()
+  runningSince = startedAt
+  const show = async () => $.ui.status(`🔎 skill-scout checking… ${seconds((await $.clock.now()) - startedAt)}`)
+  await show()
+  const ticker = $.clock.every(PROGRESS_TICK_MS, () => void show())
+
+  try {
+    const outcome = await work()
+    lastOutcome = outcome.text
+    return outcome
+  } finally {
+    ticker.cancel()
+    runningSince = null
+    $.ui.status(undefined)
+  }
+}
+
 // A second ask while a check runs waits for that one and shares its answer.
 function check($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
   if (running !== null) return running
-  running = surface($, threshold, correction).finally(() => {
+  running = withProgress($, () => surface($, threshold, correction)).finally(() => {
     running = null
   })
 
   return running
+}
+
+async function describeStatus($: EngineInterface): Promise<string> {
+  if (runningSince !== null) return `Checking, ${seconds((await $.clock.now()) - runningSince)} so far.`
+
+  return lastOutcome === null ? 'Idle. No check has run in this session yet.' : `Idle. Last check: ${lastOutcome}`
 }
 
 // The banner above the prompt is the only signal; no toast, so a suggestion never interrupts.
@@ -100,7 +132,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'skill-scout',
-      description: 'Check this conversation for a skill idea; `list` shows past ideas, `draft <n>` drafts one',
+      description: 'Check this conversation for a skill idea; `status` shows a running check, `list` past ideas, `draft <n>` drafts one',
     })
 
     return next(e)
@@ -109,6 +141,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'skill-scout' }, async ($, e) => {
     const [action = '', value = ''] = e.args.trim().split(/\s+/)
     if (action === 'list') return { text: await listHistory($) }
+    if (action === 'status') return { text: await describeStatus($) }
     if (action === 'draft') return { text: await draftFromHistory($, Number(value) || 1) }
 
     const outcome = await check($, threshold, null)
