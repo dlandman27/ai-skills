@@ -7,6 +7,10 @@ import { draftPrompt, historyLine, isCorrection, normalizeSeen, parseIdea, scout
 const idea = atom({ plugin: 'skill-scout', key: 'idea' } as const, null)
 const isChecking = atom({ plugin: 'skill-scout', key: 'isChecking' } as const, false)
 
+// Right after a resume or /clear nothing has been sent yet, so there is no conversation to fork.
+const NOTHING_TO_FORK = 'nothing-to-fork'
+const WAITING_TEXT = 'Nothing sent in this session yet (just resumed or cleared). I will check after your next message.'
+
 const SEEN_KEY = 'seen'
 const HISTORY_KEY = 'history'
 const MAX_SEEN = 200
@@ -36,8 +40,10 @@ function headline(found: SkillIdea): string {
   return found.kind === 'edit' ? `edit ${found.skill}: ${found.name}` : `new skill: ${found.name}`
 }
 
-async function check($: EngineInterface, threshold: number, correction: string | null): Promise<string> {
-  if (await read($, isChecking)) return 'Already checking.'
+type CheckOutcome = { text: string; isWaiting: boolean }
+
+async function check($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
+  if (await read($, isChecking)) return { text: 'Already checking.', isWaiting: false }
   await update($, isChecking, () => true)
 
   try {
@@ -48,19 +54,20 @@ async function check($: EngineInterface, threshold: number, correction: string |
 }
 
 // The banner above the prompt is the only signal; no toast, so a suggestion never interrupts.
-async function surface($: EngineInterface, threshold: number, correction: string | null): Promise<string> {
+async function surface($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
   const reply = await $.model.fork({ prompt: scoutPrompt(await readSeen($), correction) })
-  if (!reply.isAnswered) return `Check failed: ${reply.reason}.`
+  if (!reply.isAnswered && reply.reason === NOTHING_TO_FORK) return { text: WAITING_TEXT, isWaiting: true }
+  if (!reply.isAnswered) return { text: `Check failed: ${reply.reason}.`, isWaiting: false }
 
   const found = parseIdea(reply.text)
   const isWorthIt = found !== null && found.confidence >= threshold
-  if (!isWorthIt) return `Nothing worth a skill here (${found?.confidence ?? 0}%).`
+  if (!isWorthIt) return { text: `Nothing worth a skill here (${found?.confidence ?? 0}%).`, isWaiting: false }
 
   await remember($, found)
   await record($, found)
   await update($, idea, () => found)
 
-  return `Skill idea: ${headline(found)} (${found.confidence}%).`
+  return { text: `Skill idea: ${headline(found)} (${found.confidence}%).`, isWaiting: false }
 }
 
 async function listHistory($: EngineInterface): Promise<string> {
@@ -86,6 +93,7 @@ export const register: Register = (on, options) => {
   let tools = 0
   let workingTurnsSinceCheck = 0
   let correction: string | null = null
+  let isCheckOwed = false
 
   on('session.start', async ($, e, next) => {
     await update($, isChecking, () => false)
@@ -102,7 +110,10 @@ export const register: Register = (on, options) => {
     if (action === 'list') return { text: await listHistory($) }
     if (action === 'draft') return { text: await draftFromHistory($, Number(value) || 1) }
 
-    return { text: await check($, threshold, null) }
+    const outcome = await check($, threshold, null)
+    if (outcome.isWaiting) isCheckOwed = true
+
+    return { text: outcome.text }
   })
 
   on('prompt.submit', ($, e, next) => {
@@ -124,10 +135,11 @@ export const register: Register = (on, options) => {
     // Only turns that did work count toward the periodic check, so a quiet chat costs nothing.
     if (tools > 0) workingTurnsSinceCheck += 1
     const isBusyTurn = tools >= minTools
-    const isDue = isBusyTurn || correction !== null || workingTurnsSinceCheck >= everyTurns
+    const isDue = isCheckOwed || isBusyTurn || correction !== null || workingTurnsSinceCheck >= everyTurns
     const pushback = correction
     tools = 0
     correction = null
+    isCheckOwed = false
     if (isDue) {
       workingTurnsSinceCheck = 0
       $.clock.after(0, () => void check($, threshold, pushback))
