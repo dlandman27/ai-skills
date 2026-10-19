@@ -1,8 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { draftPrompt, historyLine, isCorrection, normalizeSeen, parseIdea, scoutPrompt, seenEntry, seenKey } from './idea'
+import type { ScoutedIdea } from '../types'
+import { draftPrompt, hasEnoughEvidence, historyLine, isCorrection, learnThreshold, normalizeSeen, parseIdea, scoutPrompt, seenEntry, seenKey } from './idea'
 
-const BASE = { confidence: 90, why: 'faster mod persistence', trigger: 't', steps: ['s1'] }
+const BASE = { confidence: 90, why: 'faster mod persistence', trigger: 't', steps: ['s1'], evidence: ['set up $.store again'], occurrences: 2 }
 
 test('parses a new-skill idea out of a chatty reply and clamps confidence', async () => {
   // Arrange
@@ -12,7 +13,7 @@ test('parses a new-skill idea out of a chatty reply and clamps confidence', asyn
   const found = parseIdea(reply)
 
   // Assert
-  expect(found).toEqual({ kind: 'new', name: 'cut-release', skill: '', confidence: 100, why: 'faster', trigger: 'release', steps: ['a'] })
+  expect(found).toEqual({ kind: 'new', name: 'cut-release', skill: '', confidence: 100, why: 'faster', trigger: 'release', steps: ['a'], evidence: [], occurrences: 0 })
 })
 
 test('parses an edit idea and falls back to new when the skill is missing', async () => {
@@ -116,8 +117,43 @@ test('drafts name every skill home and its own process', async () => {
 
 test('history lines are numbered for drafting later', async () => {
   // Act
-  const line = historyLine({ ...BASE, kind: 'edit', name: 'import-order', skill: 'mobile' }, 0)
+  const line = historyLine({ ...BASE, kind: 'edit', name: 'import-order', skill: 'mobile', id: 'a', outcome: 'pending' }, 0)
 
   // Assert
-  expect(line).toBe('1. edit mobile: import-order (90%): faster mod persistence')
+  expect(line).toBe('1. • edit mobile: import-order (90%, seen 2×): faster mod persistence')
+})
+
+test('evidence is parsed, and a count higher than the moments quoted is not believed', async () => {
+  // Arrange
+  const inflated = '{"kind": "new", "confidence": 90, "name": "x", "evidence": ["one", "two", ""], "occurrences": 9}'
+  const bare = '{"kind": "new", "confidence": 99, "name": "x"}'
+
+  // Act
+  const found = parseIdea(inflated)
+  const unbacked = parseIdea(bare)
+
+  // Assert
+  expect(found?.evidence).toEqual(['one', 'two'])
+  expect(found?.occurrences).toBe(2)
+  expect(found && hasEnoughEvidence(found, 2)).toBe(true)
+  expect(unbacked && hasEnoughEvidence(unbacked, 1)).toBe(false)
+})
+
+test('calibration learns the cutoff that best splits drafted ideas from not-useful ones', async () => {
+  // Arrange
+  const judged = (confidence: number, outcome: ScoutedIdea['outcome']): ScoutedIdea => ({ ...BASE, kind: 'new', name: `i${confidence}`, skill: '', confidence, id: `${confidence}`, outcome })
+  const few = [judged(90, 'drafted'), judged(60, 'rejected')]
+  const enough = [
+    ...[70, 72, 75, 80, 88].map(score => judged(score, 'drafted')),
+    ...[45, 50, 55, 60, 65].map(score => judged(score, 'rejected')),
+    judged(99, 'quiet'),
+  ]
+
+  // Act
+  const early = learnThreshold(few, 80)
+  const learned = learnThreshold(enough, 80)
+
+  // Assert
+  expect(early).toEqual({ threshold: 80, judged: 2 })
+  expect(learned).toEqual({ threshold: 70, judged: 10 })
 })

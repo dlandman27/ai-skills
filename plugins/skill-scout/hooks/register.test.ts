@@ -51,7 +51,7 @@ test('asking again while a check runs waits for it instead of saying "already ch
 
   // Assert
   expect(forks).toBe(1)
-  expect(answers.map(answer => answer.text)).toEqual(['Nothing worth a skill here (5%).', 'Nothing worth a skill here (5%).'])
+  expect(answers.map(answer => answer.text)).toEqual(['Nothing worth a skill here (5%, seen 0×).', 'Nothing worth a skill here (5%, seen 0×).'])
 })
 
 test('a running check shows its time in the status line and in /skill-scout status, then clears', async ($, on) => {
@@ -85,6 +85,31 @@ test('a running check shows its time in the status line and in /skill-scout stat
   expect(statuses[0]).toBe('🔎 skill-scout checking… 0s')
   expect(statuses).toContain('🔎 skill-scout checking… 3s')
   expect(statuses.at(-1)).toBeUndefined()
-  expect(during).toBe('Checking, 3s so far.')
-  expect(after).toBe('Idle. Last check: Nothing worth a skill here (5%).')
+  expect(during.split('\n')[0]).toBe('Checking, 3s so far.')
+  expect(after).toBe('Idle. Last check: Nothing worth a skill here (5%, seen 0×).\nCutoff 80% (default; 0 of 10 judged ideas needed to learn your own), and at least 2 real moments.')
+})
+
+test('weaker ideas with evidence are kept quietly, strong ones wait for your call, and your call is saved', async ($, on) => {
+  // Arrange
+  mock.store(on)
+  mock.clock(on)
+  const replies = [
+    '{"kind": "new", "confidence": 60, "name": "weak-one", "why": "w", "evidence": ["a", "b"], "occurrences": 2}',
+    '{"kind": "new", "confidence": 92, "name": "strong-one", "why": "s", "evidence": ["c", "d", "e"], "occurrences": 3}',
+  ]
+  on('model.fork', async () => ({ value: { isAnswered: true, text: replies.shift() ?? '{}', usage: NO_USAGE } }) as never)
+  const say = async (args: string) => ((await $.command.run({ command: 'skill-scout', args } as never)) as { text?: string }).text ?? ''
+
+  // Act
+  const weak = await say('')
+  const strong = await say('')
+  const rejected = await say('reject 1')
+  const list = await say('list')
+
+  // Assert
+  expect(weak).toBe('Below the 80% cutoff; kept quietly in /skill-scout list: new skill: weak-one (60%).')
+  expect(strong).toBe('Skill idea: new skill: strong-one (92%, seen 3×).')
+  expect(rejected).toBe('Marked new skill: strong-one not useful.')
+  expect(list).toContain('1. ✗ new skill: strong-one (92%, seen 3×): s')
+  expect(list).toContain('2. · new skill: weak-one (60%, seen 2×): w')
 })

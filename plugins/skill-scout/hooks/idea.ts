@@ -1,4 +1,4 @@
-import type { SeenIdea, SkillIdea } from '../types'
+import type { IdeaOutcome, ScoutedIdea, SeenIdea, SkillIdea } from '../types'
 
 // Pushback anywhere in a prompt, not just its first word; polite openers like "no worries" are not pushback.
 const CORRECTION =
@@ -45,10 +45,12 @@ Rules:
 - It must be repeatable, not a one-off.
 - Prefer "edit" over "new" when an existing skill is the natural home.
 - Be strict. Most conversations have nothing worth suggesting; say so with confidence 0.
-- confidence is how sure you are this would save real time, 0-100.${skip}${pushback}
+- confidence is how sure you are this would save real time, 0-100.
+- evidence: quote the actual moments in this conversation that show the need, one short line each (under 120 chars). No moments, no idea.
+- occurrences: how many times the workflow was repeated or the same correction made in this conversation. Count only what really happened.${skip}${pushback}
 
 Reply with exactly one JSON object:
-{"kind": "new" | "edit", "confidence": 0-100, "name": "kebab-case slug for the idea", "skill": "existing skill name for edit, else empty", "why": "under 90 chars: what it would speed up or fix", "trigger": "when the skill should fire", "steps": ["what to add or change", "..."]}`
+{"kind": "new" | "edit", "confidence": 0-100, "name": "kebab-case slug for the idea", "skill": "existing skill name for edit, else empty", "why": "under 90 chars: what it would speed up or fix", "trigger": "when the skill should fire", "steps": ["what to add or change", "..."], "evidence": ["quoted moment", "..."], "occurrences": 0}`
 }
 
 export function parseIdea(text: string): SkillIdea | null {
@@ -69,6 +71,8 @@ export function parseIdea(text: string): SkillIdea | null {
   const skill = typeof value.skill === 'string' ? value.skill.trim() : ''
   const kind = value.kind === 'edit' && skill !== '' ? 'edit' : 'new'
   if (!Number.isFinite(confidence) || name === '') return null
+  const evidence = Array.isArray(value.evidence) ? value.evidence.filter((line): line is string => typeof line === 'string' && line.trim() !== '').slice(0, 4) : []
+  const occurrences = Number(value.occurrences)
 
   return {
     kind,
@@ -78,7 +82,15 @@ export function parseIdea(text: string): SkillIdea | null {
     why: typeof value.why === 'string' ? value.why : '',
     trigger: typeof value.trigger === 'string' ? value.trigger : '',
     steps: Array.isArray(value.steps) ? value.steps.filter((step): step is string => typeof step === 'string') : [],
+    evidence,
+    // A count higher than the moments quoted is not believed: occurrences can't outrun the evidence.
+    occurrences: Math.min(Number.isFinite(occurrences) ? Math.max(0, Math.round(occurrences)) : evidence.length, Math.max(evidence.length, 1)),
   }
+}
+
+// The evidence gate: an idea must point at enough real moments, whatever confidence it claims.
+export function hasEnoughEvidence(found: SkillIdea, minEvidence: number): boolean {
+  return found.evidence.length > 0 && found.occurrences >= minEvidence
 }
 
 // Where skills live, and the process each home requires, so a draft never skips a home's own rules.
@@ -117,7 +129,27 @@ ${HOMES}
 Suggest the home that fits (general and shareable → public; team work → team; one repo → that repo; just for me → personal) and ask me to confirm before writing. Then follow that home's rules. Base it on what we actually did in this conversation.`
 }
 
-export function historyLine(idea: SkillIdea, index: number): string {
+const OUTCOME_MARKS: Record<IdeaOutcome, string> = { pending: '•', drafted: '✓', rejected: '✗', quiet: '·' }
+
+export function historyLine(idea: ScoutedIdea, index: number): string {
   const label = idea.kind === 'edit' ? `edit ${idea.skill}: ${idea.name}` : `new skill: ${idea.name}`
-  return `${index + 1}. ${label} (${idea.confidence}%): ${idea.why}`
+  return `${index + 1}. ${OUTCOME_MARKS[idea.outcome]} ${label} (${idea.confidence}%, seen ${idea.occurrences}×): ${idea.why}`
+}
+
+// Calibration: the cutoff that best splits the ideas you drafted from the ones you called not useful.
+export const MIN_JUDGED = 10
+const LEARNED_FLOOR = 40
+const LEARNED_CEILING = 95
+
+export function learnThreshold(history: ScoutedIdea[], fallback: number): { threshold: number; judged: number } {
+  const judged = history.filter(one => one.outcome === 'drafted' || one.outcome === 'rejected')
+  if (judged.length < MIN_JUDGED) return { threshold: fallback, judged: judged.length }
+
+  const mistakesAt = (cutoff: number) =>
+    judged.filter(one => (one.outcome === 'drafted' ? one.confidence < cutoff : one.confidence >= cutoff)).length
+  const candidates = [...new Set(judged.map(one => one.confidence))].map(score => Math.max(LEARNED_FLOOR, Math.min(LEARNED_CEILING, score)))
+  // Fewest mistakes wins; on a tie the higher cutoff, so it stays quiet when unsure.
+  const best = candidates.sort((a, b) => mistakesAt(a) - mistakesAt(b) || b - a)[0] ?? fallback
+
+  return { threshold: best, judged: judged.length }
 }

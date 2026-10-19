@@ -1,14 +1,20 @@
 {
   "name": "skill-scout",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Watches the chat and suggests a new skill when a repeatable workflow could be faster",
   "types": "./types/index.d.ts",
   "userConfig": {
     "threshold": {
       "type": "number",
-      "title": "Confidence threshold",
-      "description": "Only suggest at or above this confidence (0-100)",
+      "title": "Starting confidence cutoff",
+      "description": "Show ideas at or above this confidence (0-100) until 10 judged ideas teach it your own cutoff",
       "default": 80
+    },
+    "minEvidence": {
+      "type": "number",
+      "title": "Moments needed",
+      "description": "An idea must point at least this many real moments in the conversation",
+      "default": 2
     },
     "minTools": {
       "type": "number",

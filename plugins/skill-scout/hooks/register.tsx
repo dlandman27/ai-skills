@@ -1,8 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { SeenIdea, SkillIdea } from '../types'
-import { draftPrompt, historyLine, isCorrection, normalizeSeen, parseIdea, scoutPrompt, seenEntry } from './idea'
+import type { IdeaOutcome, ScoutedIdea, SeenIdea, SkillIdea } from '../types'
+import {
+  draftPrompt,
+  hasEnoughEvidence,
+  historyLine,
+  isCorrection,
+  learnThreshold,
+  MIN_JUDGED,
+  normalizeSeen,
+  parseIdea,
+  scoutPrompt,
+  seenEntry,
+} from './idea'
 
 const idea = atom({ plugin: 'skill-scout', key: 'idea' } as const, null)
 
@@ -13,7 +24,10 @@ const WAITING_TEXT = 'Nothing sent in this session yet (just resumed or cleared)
 const SEEN_KEY = 'seen'
 const HISTORY_KEY = 'history'
 const MAX_SEEN = 200
-const MAX_HISTORY = 30
+const MAX_HISTORY = 60
+
+// Ideas this strong but under the cutoff are kept quietly, so calibration can learn to lower the cutoff too.
+const QUIET_FLOOR = 40
 
 async function readSeen($: EngineInterface): Promise<SeenIdea[]> {
   return normalizeSeen(await $.store.get(SEEN_KEY))
@@ -25,14 +39,28 @@ async function remember($: EngineInterface, found: SkillIdea): Promise<void> {
   await $.store.set(SEEN_KEY, [...seen, entry].slice(-MAX_SEEN))
 }
 
-async function readHistory($: EngineInterface): Promise<SkillIdea[]> {
+// Older saves held bare ideas with no id, outcome or evidence; read them as still waiting.
+async function readHistory($: EngineInterface): Promise<ScoutedIdea[]> {
   const saved = await $.store.get(HISTORY_KEY)
-  return Array.isArray(saved) ? (saved as SkillIdea[]) : []
+  if (!Array.isArray(saved)) return []
+
+  return (saved as Partial<ScoutedIdea>[]).map((one, index) => ({
+    ...(one as SkillIdea),
+    id: one.id ?? `saved-${index}`,
+    outcome: one.outcome ?? 'pending',
+    evidence: one.evidence ?? [],
+    occurrences: one.occurrences ?? 0,
+  }))
 }
 
 // Newest first, so `/skill-scout draft 1` is always the latest idea.
-async function record($: EngineInterface, found: SkillIdea): Promise<void> {
+async function record($: EngineInterface, found: ScoutedIdea): Promise<void> {
   await $.store.set(HISTORY_KEY, [found, ...(await readHistory($))].slice(0, MAX_HISTORY))
+}
+
+async function judge($: EngineInterface, id: string, outcome: IdeaOutcome): Promise<void> {
+  const history = await readHistory($)
+  await $.store.set(HISTORY_KEY, history.map(one => (one.id === id ? { ...one, outcome } : one)))
 }
 
 function headline(found: SkillIdea): string {
@@ -71,56 +99,91 @@ async function withProgress($: EngineInterface, work: () => Promise<CheckOutcome
   }
 }
 
+type Gates = { threshold: number; minEvidence: number }
+
 // A second ask while a check runs waits for that one and shares its answer.
-function check($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
+function check($: EngineInterface, gates: Gates, correction: string | null): Promise<CheckOutcome> {
   if (running !== null) return running
-  running = withProgress($, () => surface($, threshold, correction)).finally(() => {
+  running = withProgress($, () => surface($, gates, correction)).finally(() => {
     running = null
   })
 
   return running
 }
 
-async function describeStatus($: EngineInterface): Promise<string> {
-  if (runningSince !== null) return `Checking, ${seconds((await $.clock.now()) - runningSince)} so far.`
+async function describeCutoff($: EngineInterface, gates: Gates): Promise<string> {
+  const learned = learnThreshold(await readHistory($), gates.threshold)
+  const source =
+    learned.judged >= MIN_JUDGED
+      ? `learned from ${learned.judged} ideas you judged`
+      : `default; ${learned.judged} of ${MIN_JUDGED} judged ideas needed to learn your own`
 
-  return lastOutcome === null ? 'Idle. No check has run in this session yet.' : `Idle. Last check: ${lastOutcome}`
+  return `Cutoff ${learned.threshold}% (${source}), and at least ${gates.minEvidence} real moments.`
 }
 
-// The banner above the prompt is the only signal; no toast, so a suggestion never interrupts.
-async function surface($: EngineInterface, threshold: number, correction: string | null): Promise<CheckOutcome> {
+async function describeStatus($: EngineInterface, gates: Gates): Promise<string> {
+  const now = runningSince !== null ? `Checking, ${seconds((await $.clock.now()) - runningSince)} so far.` : null
+  const idle = lastOutcome === null ? 'Idle. No check has run in this session yet.' : `Idle. Last check: ${lastOutcome}`
+
+  return `${now ?? idle}\n${await describeCutoff($, gates)}`
+}
+
+// Evidence first, then the cutoff learned from your own calls. The banner is the only signal; no toast.
+async function surface($: EngineInterface, gates: Gates, correction: string | null): Promise<CheckOutcome> {
   const reply = await $.model.fork({ prompt: scoutPrompt(await readSeen($), correction) })
   if (!reply.isAnswered && reply.reason === NOTHING_TO_FORK) return { text: WAITING_TEXT, isWaiting: true }
   if (!reply.isAnswered) return { text: `Check failed: ${reply.reason}.`, isWaiting: false }
 
   const found = parseIdea(reply.text)
-  const isWorthIt = found !== null && found.confidence >= threshold
-  if (!isWorthIt) return { text: `Nothing worth a skill here (${found?.confidence ?? 0}%).`, isWaiting: false }
+  if (found === null || !hasEnoughEvidence(found, gates.minEvidence)) {
+    const seen = found === null ? '' : `, seen ${found.occurrences}×`
+    return { text: `Nothing worth a skill here (${found?.confidence ?? 0}%${seen}).`, isWaiting: false }
+  }
 
-  await remember($, found)
-  await record($, found)
-  await update($, idea, () => found)
+  const { threshold } = learnThreshold(await readHistory($), gates.threshold)
+  const isStrong = found.confidence >= threshold
+  if (!isStrong && found.confidence < QUIET_FLOOR) return { text: `Nothing worth a skill here (${found.confidence}%).`, isWaiting: false }
 
-  return { text: `Skill idea: ${headline(found)} (${found.confidence}%).`, isWaiting: false }
+  const scouted: ScoutedIdea = { ...found, id: `${await $.clock.now()}-${found.name}`, outcome: isStrong ? 'pending' : 'quiet' }
+  await remember($, scouted)
+  await record($, scouted)
+  if (!isStrong) return { text: `Below the ${threshold}% cutoff; kept quietly in /skill-scout list: ${headline(found)} (${found.confidence}%).`, isWaiting: false }
+
+  await update($, idea, () => scouted)
+  return { text: `Skill idea: ${headline(found)} (${found.confidence}%, seen ${found.occurrences}×).`, isWaiting: false }
 }
 
 async function listHistory($: EngineInterface): Promise<string> {
   const history = await readHistory($)
   if (history.length === 0) return 'No skill ideas yet.'
 
-  return [...history.map(historyLine), '', 'Draft one with /skill-scout draft <number>.'].join('\n')
+  return [
+    ...history.map(historyLine),
+    '',
+    '• waiting  ✓ drafted  ✗ not useful  · kept quietly below the cutoff',
+    'Draft one with /skill-scout draft <number>, or mark one not useful with /skill-scout reject <number>.',
+  ].join('\n')
 }
 
 async function draftFromHistory($: EngineInterface, number: number): Promise<string> {
   const chosen = (await readHistory($))[number - 1]
   if (!chosen) return `No idea #${number}. Run /skill-scout list to see them.`
 
+  await judge($, chosen.id, 'drafted')
   await $.prompt.submit({ text: draftPrompt(chosen) })
   return `Drafting ${headline(chosen)}.`
 }
 
+async function rejectFromHistory($: EngineInterface, number: number): Promise<string> {
+  const chosen = (await readHistory($))[number - 1]
+  if (!chosen) return `No idea #${number}. Run /skill-scout list to see them.`
+
+  await judge($, chosen.id, 'rejected')
+  return `Marked ${headline(chosen)} not useful.`
+}
+
 export const register: Register = (on, options) => {
-  const threshold = Number(options.threshold)
+  const gates: Gates = { threshold: Number(options.threshold), minEvidence: Number(options.minEvidence) }
   const minTools = Number(options.minTools)
   const everyTurns = Number(options.everyTurns)
 
@@ -132,7 +195,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'skill-scout',
-      description: 'Check this conversation for a skill idea; `status` shows a running check, `list` past ideas, `draft <n>` drafts one',
+      description: 'Check this conversation for a skill idea; `status`, `list`, `draft <n>`, `reject <n>`',
     })
 
     return next(e)
@@ -141,10 +204,11 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'skill-scout' }, async ($, e) => {
     const [action = '', value = ''] = e.args.trim().split(/\s+/)
     if (action === 'list') return { text: await listHistory($) }
-    if (action === 'status') return { text: await describeStatus($) }
+    if (action === 'status') return { text: await describeStatus($, gates) }
     if (action === 'draft') return { text: await draftFromHistory($, Number(value) || 1) }
+    if (action === 'reject') return { text: await rejectFromHistory($, Number(value) || 1) }
 
-    const outcome = await check($, threshold, null)
+    const outcome = await check($, gates, null)
     if (outcome.isWaiting) isCheckOwed = true
 
     return { text: outcome.text }
@@ -176,29 +240,44 @@ export const register: Register = (on, options) => {
     isCheckOwed = false
     if (isDue) {
       workingTurnsSinceCheck = 0
-      $.clock.after(0, () => void check($, threshold, pushback))
+      $.clock.after(0, () => void check($, gates, pushback))
     }
 
     return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const current: SkillIdea | null = await read($, idea)
+    const current: ScoutedIdea | null = await read($, idea)
     if (e.props.hasSurvey || current === null) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const dismiss = () => update($, idea, () => null)
+    const close = () => update($, idea, () => null)
+    // Your call on each idea is what calibration learns from; "Later" leaves it undecided.
+    const decide = async (outcome: IdeaOutcome) => {
+      await close()
+      await judge($, current.id, outcome)
+    }
 
     return (
       <Box flexDirection="column">
         <Text>
           <Text color="warning">{current.kind === 'edit' ? '✎ skill edit ' : '💡 new skill '}</Text>
           <Text bold>{current.kind === 'edit' ? `${current.skill} · ${current.name}` : current.name}</Text>
-          <Text dimColor> · {current.confidence}%</Text>
+          <Text dimColor>
+            {' '}
+            · {current.confidence}% · seen {current.occurrences}×
+          </Text>
         </Text>
         <Text dimColor wrap="truncate-end">
           {current.why}
         </Text>
+        {current.evidence.slice(0, 2).map(moment => (
+          <Text dimColor wrap="truncate-end">
+            {'  “'}
+            {moment}
+            {'”'}
+          </Text>
+        ))}
         <Box gap={1}>
           <Button
             key="draft"
@@ -206,11 +285,12 @@ export const register: Register = (on, options) => {
             hotkey="d"
             variant="primary"
             onPress={async () => {
-              await dismiss()
+              await decide('drafted')
               await $.prompt.submit({ text: draftPrompt(current) })
             }}
           />
-          <Button key="dismiss" label="Later" hotkey="x" role="dismiss" onPress={dismiss} />
+          <Button key="reject" label="Not useful" hotkey="n" onPress={() => decide('rejected')} />
+          <Button key="dismiss" label="Later" hotkey="x" role="dismiss" onPress={close} />
         </Box>
       </Box>
     )
