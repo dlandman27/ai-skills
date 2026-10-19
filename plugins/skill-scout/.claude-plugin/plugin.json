@@ -1,6 +1,6 @@
 {
   "name": "skill-scout",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Watches the chat and suggests a new skill when a repeatable workflow could be faster",
   "types": "./types/index.d.ts",
   "userConfig": {

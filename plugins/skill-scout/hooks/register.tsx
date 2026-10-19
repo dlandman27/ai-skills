@@ -161,25 +161,46 @@ async function listHistory($: EngineInterface): Promise<string> {
     ...history.map(historyLine),
     '',
     '• waiting  ✓ drafted  ✗ not useful  · kept quietly below the cutoff',
-    'Draft one with /skill-scout draft <number>, or mark one not useful with /skill-scout reject <number>.',
+    'Draft with /skill-scout draft 1 (or 1 2 3, or all); mark not useful with /skill-scout reject 2.',
   ].join('\n')
 }
 
-async function draftFromHistory($: EngineInterface, number: number): Promise<string> {
-  const chosen = (await readHistory($))[number - 1]
-  if (!chosen) return `No idea #${number}. Run /skill-scout list to see them.`
-
-  await judge($, chosen.id, 'drafted')
-  await $.prompt.submit({ text: draftPrompt(chosen) })
-  return `Drafting ${headline(chosen)}.`
+// `1 2 3`, `1,2,3` or `all`: the ideas to act on, by their numbers in /skill-scout list.
+function pickNumbers(args: string, count: number): number[] {
+  if (args.trim() === 'all') return Array.from({ length: count }, (_, index) => index + 1)
+  const numbers = args.split(/[\s,]+/).filter(Boolean).map(Number)
+  return numbers.length === 0 ? [1] : numbers
 }
 
-async function rejectFromHistory($: EngineInterface, number: number): Promise<string> {
-  const chosen = (await readHistory($))[number - 1]
-  if (!chosen) return `No idea #${number}. Run /skill-scout list to see them.`
+async function draftFromHistory($: EngineInterface, args: string): Promise<string> {
+  const history = await readHistory($)
+  const numbers = pickNumbers(args, history.length)
+  const missing = numbers.filter(number => !history[number - 1])
+  if (missing.length > 0) return `No idea #${missing.join(', #')}. Run /skill-scout list to see them; draft several with /skill-scout draft 1 2 3.`
 
-  await judge($, chosen.id, 'rejected')
-  return `Marked ${headline(chosen)} not useful.`
+  const chosen = numbers.map(number => history[number - 1]!)
+  for (const one of chosen) await judge($, one.id, 'drafted')
+  // A command can't submit a prompt itself (the new turn would wait on this command), so each one is queued for just after it.
+  for (const one of chosen) {
+    $.clock.after(0, () => {
+      $.prompt.submit({ text: draftPrompt(one) }).catch((error: unknown) => {
+        $.ui.log(`skill-scout: could not start the draft of ${headline(one)}: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    })
+  }
+
+  return `Drafting ${chosen.map(headline).join('; ')}.`
+}
+
+async function rejectFromHistory($: EngineInterface, args: string): Promise<string> {
+  const history = await readHistory($)
+  const numbers = pickNumbers(args, history.length)
+  const missing = numbers.filter(number => !history[number - 1])
+  if (missing.length > 0) return `No idea #${missing.join(', #')}. Run /skill-scout list to see them.`
+
+  const chosen = numbers.map(number => history[number - 1]!)
+  for (const one of chosen) await judge($, one.id, 'rejected')
+  return `Marked ${chosen.map(headline).join('; ')} not useful.`
 }
 
 export const register: Register = (on, options) => {
@@ -202,11 +223,12 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'skill-scout' }, async ($, e) => {
-    const [action = '', value = ''] = e.args.trim().split(/\s+/)
+    const [action = '', ...rest] = e.args.trim().split(/\s+/)
+    const value = rest.join(' ')
     if (action === 'list') return { text: await listHistory($) }
     if (action === 'status') return { text: await describeStatus($, gates) }
-    if (action === 'draft') return { text: await draftFromHistory($, Number(value) || 1) }
-    if (action === 'reject') return { text: await rejectFromHistory($, Number(value) || 1) }
+    if (action === 'draft') return { text: await draftFromHistory($, value) }
+    if (action === 'reject') return { text: await rejectFromHistory($, value) }
 
     const outcome = await check($, gates, null)
     if (outcome.isWaiting) isCheckOwed = true

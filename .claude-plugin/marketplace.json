@@ -14,7 +14,7 @@
       "name": "skill-scout",
       "source": "./plugins/skill-scout",
       "description": "A Claude Code mod that watches the chat and suggests a new skill, or an edit to an existing one, when a workflow could be faster",
-      "version": "0.3.0"
+      "version": "0.3.1"
     }
   ]
 }

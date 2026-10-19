@@ -31,7 +31,7 @@ General-purpose engineering skills for Claude Code, packaged as a plugin marketp
 
 | Mod | What it does |
 |-----|--------------|
-| `skill-scout` | Watches the chat and suggests a new skill, or an edit to an existing one, when a workflow could be faster. Each idea must quote at least two real moments from the conversation, and the cutoff learns from what you draft or mark **Not useful**. Shows a banner with **Draft it**; `/skill-scout status` while a check runs (the status line also shows its time), `/skill-scout list`, `draft <n>` and `reject <n>` for past ideas. Install with `/plugin install skill-scout@ai-skills`, or point `CLAUDE_CODE_PLUGIN_DIRS` at `plugins/skill-scout`. |
+| `skill-scout` | Watches the chat and suggests a new skill, or an edit to an existing one, when a workflow could be faster. Each idea must quote at least two real moments from the conversation, and the cutoff learns from what you draft or mark **Not useful**. Shows a banner with **Draft it**; `/skill-scout status` while a check runs (the status line also shows its time), `/skill-scout list`, `draft <n>` (or `draft 1 2 3`, `draft all`) and `reject <n>` for past ideas. Install with `/plugin install skill-scout@ai-skills`, or point `CLAUDE_CODE_PLUGIN_DIRS` at `plugins/skill-scout`. |
 
 ## Credits
 

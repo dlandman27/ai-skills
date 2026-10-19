@@ -113,3 +113,37 @@ test('weaker ideas with evidence are kept quietly, strong ones wait for your cal
   expect(list).toContain('1. ✗ new skill: strong-one (92%, seen 3×): s')
   expect(list).toContain('2. · new skill: weak-one (60%, seen 2×): w')
 })
+
+test('/skill-scout draft takes several numbers and submits each draft just after the command, not from inside it', async ($, on) => {
+  // Arrange
+  mock.store(on)
+  const clock = mock.clock(on)
+  const replies = [
+    '{"kind": "new", "confidence": 60, "name": "first", "why": "w", "evidence": ["a", "b"], "occurrences": 2}',
+    '{"kind": "new", "confidence": 61, "name": "second", "why": "w", "evidence": ["c", "d"], "occurrences": 2}',
+  ]
+  on('model.fork', async () => ({ value: { isAnswered: true, text: replies.shift() ?? '{}', usage: NO_USAGE } }) as never)
+  const submitted: string[] = []
+  on('prompt.submit', async (_$, e) => {
+    submitted.push(e.text)
+    return { value: {} } as never
+  })
+  const say = async (args: string) => ((await $.command.run({ command: 'skill-scout', args } as never)) as { text?: string }).text ?? ''
+  await say('')
+  await say('')
+
+  // Act
+  const missing = await say('draft 123')
+  const drafting = await say('draft 1 2')
+  const beforeTick = submitted.length
+  await clock.advance(10)
+  const list = await say('list')
+
+  // Assert
+  expect(missing).toBe('No idea #123. Run /skill-scout list to see them; draft several with /skill-scout draft 1 2 3.')
+  expect(drafting).toBe('Drafting new skill: second; new skill: first.')
+  expect(beforeTick).toBe(0)
+  expect(submitted.map(text => text.match(/`([a-z-]+)`/)?.[1])).toEqual(['second', 'first'])
+  expect(list).toContain('1. ✓ new skill: second')
+  expect(list).toContain('2. ✓ new skill: first')
+})
